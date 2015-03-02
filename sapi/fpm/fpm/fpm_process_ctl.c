@@ -365,7 +365,7 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 
 			fpm_request_last_activity(last_idle_child, &last);
 			fpm_clock_get(&now);
-			if (last.tv_sec < now.tv_sec - wp->config->pm_process_idle_timeout) {
+			if (last.tv_sec < now.tv_sec - wp->config->pm_process_idle_timeout && idle > wp->config->pm_max_spare_servers) {
 				last_idle_child->idle_kill = 1;
 				fpm_pctl_kill(last_idle_child->pid, FPM_PCTL_QUIT);
 			}
