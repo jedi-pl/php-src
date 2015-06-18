@@ -333,6 +333,7 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 	for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
 		struct fpm_child_s *child;
 		struct fpm_child_s *last_idle_child = NULL;
+		struct fpm_scoreboard_s scoreboard;
 		int idle = 0;
 		int active = 0;
 		int children_to_fork;
@@ -404,23 +405,28 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 				"\"slow requests\":%lu"
 				"}";
 
+			fpm_spinlock(&(wp->scoreboard)->lock, 0);
+			/* copy the scoreboard not to bother other processes */
+            scoreboard = *(wp->scoreboard);
+            fpm_unlock(wp->scoreboard->lock);
+
             now_epoch = time(NULL);
             spprintf(&buffer, 0, short_syntax,
-                wp->scoreboard->pool,
-                PM2STR(wp->scoreboard->pm),
-                now_epoch - wp->scoreboard->start_epoch,
-                wp->scoreboard->requests,
+                scoreboard->pool,
+                PM2STR(scoreboard->pm),
+                now_epoch - scoreboard->start_epoch,
+                scoreboard->requests,
             #ifdef HAVE_FPM_LQ
-                wp->scoreboard->lq,
-                wp->scoreboard->lq_max,
-                wp->scoreboard->lq_len,
+                scoreboard->lq,
+                scoreboard->lq_max,
+                scoreboard->lq_len,
             #endif
-                wp->scoreboard->idle,
-                wp->scoreboard->active,
-                wp->scoreboard->idle + wp->scoreboard->active,
-                wp->scoreboard->active_max,
-                wp->scoreboard->max_children_reached,
-                wp->scoreboard->slow_rq);
+                scoreboard->idle,
+                scoreboard->active,
+                scoreboard->idle + scoreboard->active,
+                scoreboard->active_max,
+                scoreboard->max_children_reached,
+                scoreboard->slow_rq);
 
             fprintf(f, buffer);
         }
