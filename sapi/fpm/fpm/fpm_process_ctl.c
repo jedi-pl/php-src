@@ -405,28 +405,28 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 				"\"slow requests\":%lu"
 				"}";
 
-			fpm_spinlock(&(wp->scoreboard)->lock, 0);
+			fpm_spinlock(&wp->scoreboard->lock, 0);
 			/* copy the scoreboard not to bother other processes */
             scoreboard = *(wp->scoreboard);
             fpm_unlock(wp->scoreboard->lock);
 
             now_epoch = time(NULL);
             spprintf(&buffer, 0, short_syntax,
-                scoreboard->pool,
-                PM2STR(scoreboard->pm),
-                now_epoch - scoreboard->start_epoch,
-                scoreboard->requests,
+                scoreboard.pool,
+                PM2STR(scoreboard.pm),
+                now_epoch - scoreboard.start_epoch,
+                scoreboard.requests,
             #ifdef HAVE_FPM_LQ
-                scoreboard->lq,
-                scoreboard->lq_max,
-                scoreboard->lq_len,
+                scoreboard.lq,
+                scoreboard.lq_max,
+                scoreboard.lq_len,
             #endif
-                scoreboard->idle,
-                scoreboard->active,
-                scoreboard->idle + scoreboard->active,
-                scoreboard->active_max,
-                scoreboard->max_children_reached,
-                scoreboard->slow_rq);
+                scoreboard.idle,
+                scoreboard.active,
+                scoreboard.idle + scoreboard.active,
+                scoreboard.active_max,
+                scoreboard.max_children_reached,
+                scoreboard.slow_rq);
 
             fprintf(f, buffer);
         }
