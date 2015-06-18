@@ -26,6 +26,8 @@
 static int fpm_state = FPM_PCTL_STATE_NORMAL;
 static int fpm_signal_sent = 0;
 
+int fpm_status_dump_time = 0;
+
 
 static const char *fpm_state_names[] = {
 	[FPM_PCTL_STATE_NORMAL] = "normal",
@@ -310,6 +312,23 @@ static void fpm_pctl_check_request_timeout(struct timeval *now) /* {{{ */
 static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{ */
 {
 	struct fpm_worker_pool_s *wp;
+	struct timeval tnow;
+	fpm_clock_get(&tnow);
+
+	int scoreboard_dump = 0;
+	int first_iteration = 1;
+	FILE *f;
+
+	if(tnow.tv_sec % 60 == 47 && fpm_status_dump_time < tnow.tv_sec){
+        fpm_status_dump_time = tnow.tv_sec;
+        scoreboard_dump = 1;
+
+        f = fopen("/tmp/php-fpm.stats.json", "w");
+        if (f == NULL)
+        {
+            scoreboard_dump = 0;
+        }
+    }
 
 	for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
 		struct fpm_child_s *child;
@@ -354,6 +373,57 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 			}
 		}
 		fpm_scoreboard_update(idle, active, cur_lq, -1, -1, -1, 0, FPM_SCOREBOARD_ACTION_SET, wp->scoreboard);
+
+		/* scoreboard dump */
+        if(scoreboard_dump){
+            char *short_syntax;
+            char *buffer;
+            time_t now_epoch;
+            if(first_iteration){
+                fprintf(f, "{\n");
+                first_iteration = 0;
+            }else{
+                fprintf(f, ",\n");
+            }
+
+            short_syntax =
+				"\"%s\": {"
+				"\"process manager\":\"%s\","
+				"\"start since\":%lu,"
+				"\"accepted conn\":%lu,"
+#ifdef HAVE_FPM_LQ
+				"\"listen queue\":%u,"
+				"\"max listen queue\":%u,"
+				"\"listen queue len\":%d,"
+#endif
+				"\"idle processes\":%d,"
+				"\"active processes\":%d,"
+				"\"total processes\":%d,"
+				"\"max active processes\":%d,"
+				"\"max children reached\":%u,"
+				"\"slow requests\":%lu"
+				"}";
+
+            now_epoch = time(NULL);
+            spprintf(&buffer, 0, short_syntax,
+                wp->scoreboard->pool,
+                PM2STR(wp->scoreboard->pm),
+                now_epoch - wp->scoreboard->start_epoch,
+                wp->scoreboard->requests,
+            #ifdef HAVE_FPM_LQ
+                wp->scoreboard->lq,
+                wp->scoreboard->lq_max,
+                wp->scoreboard->lq_len,
+            #endif
+                wp->scoreboard->idle,
+                wp->scoreboard->active,
+                wp->scoreboard->idle + wp->scoreboard->active,
+                wp->scoreboard->active_max,
+                wp->scoreboard->max_children_reached,
+                wp->scoreboard->slow_rq);
+
+            fprintf(f, buffer);
+        }
 
 		/* this is specific to PM_STYLE_ONDEMAND */
 		if (wp->config->pm == PM_STYLE_ONDEMAND) {
@@ -434,6 +504,11 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 			continue;
 		}
 		wp->idle_spawn_rate = 1;
+	}
+
+	if(scoreboard_dump){
+	    fprintf(f, "}");
+	    fclose(f);
 	}
 }
 /* }}} */
