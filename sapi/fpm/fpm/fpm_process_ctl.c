@@ -380,55 +380,61 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
             char *short_syntax;
             char *buffer;
             time_t now_epoch;
-            if(first_iteration){
-                fprintf(f, "{\n");
-                first_iteration = 0;
+
+            if (!wp->scoreboard) {
+            			zlog(ZLOG_ERROR, "status: unable to find or access status shared memory");
             }else{
-                fprintf(f, ",\n");
+                if(fpm_spinlock(&wp->scoreboard->lock, 1)){
+                    /* copy the scoreboard not to bother other processes */
+                    scoreboard = *(wp->scoreboard);
+                    fpm_unlock(wp->scoreboard->lock);
+
+                    if(first_iteration){
+                        fprintf(f, "{\n");
+                        first_iteration = 0;
+                    }else{
+                        fprintf(f, ",\n");
+                    }
+
+                    short_syntax =
+                        "\"%s\": {"
+                        "\"process manager\":\"%s\","
+                        "\"start since\":%lu,"
+                        "\"accepted conn\":%lu,"
+        #ifdef HAVE_FPM_LQ
+                        "\"listen queue\":%u,"
+                        "\"max listen queue\":%u,"
+                        "\"listen queue len\":%d,"
+        #endif
+                        "\"idle processes\":%d,"
+                        "\"active processes\":%d,"
+                        "\"total processes\":%d,"
+                        "\"max active processes\":%d,"
+                        "\"max children reached\":%u,"
+                        "\"slow requests\":%lu"
+                        "}";
+
+                    now_epoch = time(NULL);
+                    spprintf(&buffer, 0, short_syntax,
+                        scoreboard.pool,
+                        PM2STR(scoreboard.pm),
+                        now_epoch - scoreboard.start_epoch,
+                        scoreboard.requests,
+                    #ifdef HAVE_FPM_LQ
+                        scoreboard.lq,
+                        scoreboard.lq_max,
+                        scoreboard.lq_len,
+                    #endif
+                        scoreboard.idle,
+                        scoreboard.active,
+                        scoreboard.idle + scoreboard.active,
+                        scoreboard.active_max,
+                        scoreboard.max_children_reached,
+                        scoreboard.slow_rq);
+
+                    fprintf(f, buffer);
+                }
             }
-
-            short_syntax =
-				"\"%s\": {"
-				"\"process manager\":\"%s\","
-				"\"start since\":%lu,"
-				"\"accepted conn\":%lu,"
-#ifdef HAVE_FPM_LQ
-				"\"listen queue\":%u,"
-				"\"max listen queue\":%u,"
-				"\"listen queue len\":%d,"
-#endif
-				"\"idle processes\":%d,"
-				"\"active processes\":%d,"
-				"\"total processes\":%d,"
-				"\"max active processes\":%d,"
-				"\"max children reached\":%u,"
-				"\"slow requests\":%lu"
-				"}";
-
-			fpm_spinlock(&wp->scoreboard->lock, 0);
-			/* copy the scoreboard not to bother other processes */
-            scoreboard = *(wp->scoreboard);
-            fpm_unlock(wp->scoreboard->lock);
-
-            now_epoch = time(NULL);
-            spprintf(&buffer, 0, short_syntax,
-                scoreboard.pool,
-                PM2STR(scoreboard.pm),
-                now_epoch - scoreboard.start_epoch,
-                scoreboard.requests,
-            #ifdef HAVE_FPM_LQ
-                scoreboard.lq,
-                scoreboard.lq_max,
-                scoreboard.lq_len,
-            #endif
-                scoreboard.idle,
-                scoreboard.active,
-                scoreboard.idle + scoreboard.active,
-                scoreboard.active_max,
-                scoreboard.max_children_reached,
-                scoreboard.slow_rq);
-
-            fprintf(f, buffer);
         }
 
 		/* this is specific to PM_STYLE_ONDEMAND */
