@@ -313,27 +313,95 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 {
 	struct fpm_worker_pool_s *wp;
 	struct timeval tnow;
+	int pid;
+	int scoreboard_dump = 1;
+    FILE *f;
+    int first_iteration = 1;
+    struct fpm_scoreboard_s scoreboard;
+    char short_syntax[] = "\"%s\": {"
+                          "\"process manager\":\"%s\","
+                          "\"start since\":%lu,"
+                          "\"accepted conn\":%lu,"
+          #ifdef HAVE_FPM_LQ
+                          "\"listen queue\":%u,"
+                          "\"max listen queue\":%u,"
+                          "\"listen queue len\":%d,"
+          #endif
+                          "\"idle processes\":%d,"
+                          "\"active processes\":%d,"
+                          "\"total processes\":%d,"
+                          "\"max active processes\":%d,"
+                          "\"max children reached\":%u,"
+                          "\"slow requests\":%lu"
+                          "}";
+    char *buffer;
 	fpm_clock_get(&tnow);
-
-	int scoreboard_dump = 0;
-	int first_iteration = 1;
-	FILE *f;
 
 	if(tnow.tv_sec % 60 == 47 && fpm_status_dump_time < tnow.tv_sec){
         fpm_status_dump_time = tnow.tv_sec;
-        scoreboard_dump = 1;
+        pid = fork();
+        switch (pid) {
+            case 0 :
+                f = fopen("/tmp/php-fpm.stats.json", "w");
+                if (f == NULL)
+                {
+                }else{
+                    for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
+                        buffer = NULL;
+                        time_t now_epoch;
+                        if (wp->config == NULL) continue;
 
-        f = fopen("/tmp/php-fpm.stats.json", "w");
-        if (f == NULL)
-        {
-            scoreboard_dump = 0;
+                        if (!wp->scoreboard) {
+                            zlog(ZLOG_ERROR, "status: unable to find or access status shared memory");
+                        }else{
+                            if(fpm_spinlock(&wp->scoreboard->lock, 1)){
+                                /* copy the scoreboard not to bother other processes */
+                                scoreboard = *(wp->scoreboard);
+                                fpm_unlock(wp->scoreboard->lock);
+
+                                if(first_iteration){
+                                    fprintf(f, "{\n");
+                                    first_iteration = 0;
+                                }else{
+                                    fprintf(f, ",\n");
+                                }
+
+                                now_epoch = time(NULL);
+                                spprintf(&buffer, 0, short_syntax,
+                                    scoreboard.pool,
+                                    PM2STR(scoreboard.pm),
+                                    now_epoch - scoreboard.start_epoch,
+                                    scoreboard.requests,
+                                #ifdef HAVE_FPM_LQ
+                                    scoreboard.lq,
+                                    scoreboard.lq_max,
+                                    scoreboard.lq_len,
+                                #endif
+                                    scoreboard.idle,
+                                    scoreboard.active,
+                                    scoreboard.idle + scoreboard.active,
+                                    scoreboard.active_max,
+                                    scoreboard.max_children_reached,
+                                    scoreboard.slow_rq);
+
+                                fprintf(f, buffer);
+                            }
+                        }
+                    }
+                    fprintf(f, "}");
+                    fclose(f);
+                }
+                exit(99);
+            case -1 :
+                zlog(ZLOG_SYSERROR, "fork() failed");
+            default :
+                zlog(ZLOG_NOTICE, "[monitoring] child %d started", (int) pid);
         }
     }
 
 	for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
 		struct fpm_child_s *child;
 		struct fpm_child_s *last_idle_child = NULL;
-		struct fpm_scoreboard_s scoreboard;
 		int idle = 0;
 		int active = 0;
 		int children_to_fork;
@@ -375,68 +443,6 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 		}
 		fpm_scoreboard_update(idle, active, cur_lq, -1, -1, -1, 0, FPM_SCOREBOARD_ACTION_SET, wp->scoreboard);
 
-		/* scoreboard dump */
-        if(scoreboard_dump){
-            char *short_syntax;
-            char *buffer;
-            time_t now_epoch;
-
-            if (!wp->scoreboard) {
-            			zlog(ZLOG_ERROR, "status: unable to find or access status shared memory");
-            }else{
-                if(fpm_spinlock(&wp->scoreboard->lock, 1)){
-                    /* copy the scoreboard not to bother other processes */
-                    scoreboard = *(wp->scoreboard);
-                    fpm_unlock(wp->scoreboard->lock);
-
-                    if(first_iteration){
-                        fprintf(f, "{\n");
-                        first_iteration = 0;
-                    }else{
-                        fprintf(f, ",\n");
-                    }
-
-                    short_syntax =
-                        "\"%s\": {"
-                        "\"process manager\":\"%s\","
-                        "\"start since\":%lu,"
-                        "\"accepted conn\":%lu,"
-        #ifdef HAVE_FPM_LQ
-                        "\"listen queue\":%u,"
-                        "\"max listen queue\":%u,"
-                        "\"listen queue len\":%d,"
-        #endif
-                        "\"idle processes\":%d,"
-                        "\"active processes\":%d,"
-                        "\"total processes\":%d,"
-                        "\"max active processes\":%d,"
-                        "\"max children reached\":%u,"
-                        "\"slow requests\":%lu"
-                        "}";
-
-                    now_epoch = time(NULL);
-                    spprintf(&buffer, 0, short_syntax,
-                        scoreboard.pool,
-                        PM2STR(scoreboard.pm),
-                        now_epoch - scoreboard.start_epoch,
-                        scoreboard.requests,
-                    #ifdef HAVE_FPM_LQ
-                        scoreboard.lq,
-                        scoreboard.lq_max,
-                        scoreboard.lq_len,
-                    #endif
-                        scoreboard.idle,
-                        scoreboard.active,
-                        scoreboard.idle + scoreboard.active,
-                        scoreboard.active_max,
-                        scoreboard.max_children_reached,
-                        scoreboard.slow_rq);
-
-                    fprintf(f, buffer);
-                }
-            }
-        }
-
 		/* this is specific to PM_STYLE_ONDEMAND */
 		if (wp->config->pm == PM_STYLE_ONDEMAND) {
 			struct timeval last, now;
@@ -447,7 +453,7 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 
 			fpm_request_last_activity(last_idle_child, &last);
 			fpm_clock_get(&now);
-			if (last.tv_sec < now.tv_sec - wp->config->pm_process_idle_timeout && idle > wp->config->pm_max_spare_servers) {
+			if ((last.tv_sec < now.tv_sec - 30 * wp->config->pm_process_idle_timeout) || (last.tv_sec < now.tv_sec - wp->config->pm_process_idle_timeout && idle > wp->config->pm_max_spare_servers)) {
 				last_idle_child->idle_kill = 1;
 				fpm_pctl_kill(last_idle_child->pid, FPM_PCTL_QUIT);
 			}
@@ -516,11 +522,6 @@ static void fpm_pctl_perform_idle_server_maintenance(struct timeval *now) /* {{{
 			continue;
 		}
 		wp->idle_spawn_rate = 1;
-	}
-
-	if(scoreboard_dump){
-	    fprintf(f, "}");
-	    fclose(f);
 	}
 }
 /* }}} */

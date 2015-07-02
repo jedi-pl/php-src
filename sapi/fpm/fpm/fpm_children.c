@@ -292,7 +292,9 @@ void fpm_children_bury() /* {{{ */
 				}
 			}
 		} else {
-			zlog(ZLOG_ALERT, "oops, unknown child (%d) exited %s. Please open a bug report (https://bugs.php.net).", pid, buf);
+		    if(WEXITSTATUS(status) != 99){
+			    zlog(ZLOG_ALERT, "oops, unknown child (%d) exited %s. Please open a bug report (https://bugs.php.net).", pid, buf);
+			}
 		}
 	}
 }
